@@ -52,7 +52,7 @@ func TestArchive_Stream(t *testing.T) {
 			}
 
 			// Create the archive.
-			archivePath := filepath.Join(rfs.root, "archive.tar.gz")
+			archivePath := filepath.Join(rfs.root, "archive.tar.zst")
 			g.Assert(a.Create(context.Background(), archivePath)).IsNil()
 
 			// Ensure the archive exists.

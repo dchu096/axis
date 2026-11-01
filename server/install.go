@@ -480,7 +480,7 @@ func (ip *InstallationProcess) Execute() (string, error) {
 	// If there is an error during the streaming output just report it and do nothing else, the
 	// install can still run, the console just won't have any output.
 	go func(id string) {
-		ip.Server.Events().Publish(DaemonMessageEvent, "Starting installation process, this could take a few minutes...")
+		ip.Server.Events().Publish(DaemonMessageEvent, "Installing the server. This can take a few minutes...")
 		if err := ip.StreamOutput(ctx, id); err != nil {
 			ip.Server.Log().WithField("error", err).Warn("error connecting to server install stream output")
 		}
@@ -491,7 +491,7 @@ func (ip *InstallationProcess) Execute() (string, error) {
 	case err := <-eChan:
 		// Once the container has stopped running we can mark the install process as being completed.
 		if err == nil {
-			ip.Server.Events().Publish(DaemonMessageEvent, "Installation process completed.")
+			ip.Server.Events().Publish(DaemonMessageEvent, "Installation finished.")
 		} else {
 			return "", err
 		}
@@ -546,6 +546,11 @@ func (ip *InstallationProcess) resourceLimits() container.Resources {
 	} else if cfg.CpuLimit != 0 && cfg.CpuLimit < limits.Cpu {
 		cfg.CpuLimit = limits.Cpu
 	}
+
+	// Installer containers never use the live burst token bucket — keep a static
+	// cpu_limit (or installer floor) for the duration of the install process.
+	cfg.CpuBurst = 0
+	cfg.CpuBaseline = 0
 
 	resources := cfg.AsContainerResources()
 	// Explicitly remove the PID limits for the installation container. These scripts are

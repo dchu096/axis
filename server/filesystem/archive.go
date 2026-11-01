@@ -13,7 +13,7 @@ import (
 	"emperror.dev/errors"
 	"github.com/apex/log"
 	"github.com/juju/ratelimit"
-	"github.com/klauspost/pgzip"
+	"github.com/klauspost/compress/zstd"
 	ignore "github.com/sabhiram/go-gitignore"
 
 	"github.com/0x7d8/wings/config"
@@ -107,6 +107,15 @@ func (a *Archive) Create(ctx context.Context, dst string) error {
 
 type walkFunc func(dirfd int, name, relative string, d ufs.DirEntry) error
 
+// compressionWriter wraps w with zstd (Atlas multipart contract — always .tar.zst).
+func (a *Archive) compressionWriter(w io.Writer) (io.WriteCloser, error) {
+	level := config.Get().System.Backups.ZstdLevel
+	if level < 1 {
+		level = 3
+	}
+	return zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(level)))
+}
+
 // Stream streams the creation of the archive to the given writer.
 func (a *Archive) Stream(ctx context.Context, w io.Writer) error {
 	if a.Filesystem == nil {
@@ -129,24 +138,15 @@ func (a *Archive) Stream(ctx context.Context, w io.Writer) error {
 		a.Files = files
 	}
 
-	// Choose which compression level to use based on the compression_level configuration option
-	var compressionLevel int
-	switch config.Get().System.Backups.CompressionLevel {
-	case "none":
-		compressionLevel = pgzip.NoCompression
-	case "best_compression":
-		compressionLevel = pgzip.BestCompression
-	default:
-		compressionLevel = pgzip.BestSpeed
+	// Compression writer (always zstd).
+	cw, err := a.compressionWriter(w)
+	if err != nil {
+		return err
 	}
+	defer cw.Close()
 
-	// Create a new gzip writer around the file.
-	gw, _ := pgzip.NewWriterLevel(w, compressionLevel)
-	_ = gw.SetConcurrency(1<<20, 1)
-	defer gw.Close()
-
-	// Create a new tar writer around the gzip writer.
-	tw := tar.NewWriter(gw)
+	// Create a new tar writer around the compression writer.
+	tw := tar.NewWriter(cw)
 	defer tw.Close()
 
 	a.w = NewTarProgress(tw, a.Progress)

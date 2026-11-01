@@ -19,12 +19,12 @@ import (
 
 // Returns a single server from the collection of servers.
 func getServer(c *gin.Context) {
-	c.JSON(http.StatusOK, ExtractServer(c).ToAPIResponse())
+	c.JSON(http.StatusOK, middleware.ExtractServer(c).ToAPIResponse())
 }
 
 // Returns the logs for a given server instance.
 func getServerLogs(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	l, _ := strconv.Atoi(c.DefaultQuery("size", "100"))
 	if l <= 0 {
@@ -51,7 +51,7 @@ func getServerLogs(c *gin.Context) {
 // things are happening, so theres no reason to sit and wait for a request to finish. We'll
 // just see over the socket if something isn't working correctly.
 func postServerPower(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	var data struct {
 		Action      server.PowerAction `json:"action"`
@@ -106,7 +106,7 @@ func postServerPower(c *gin.Context) {
 
 // Sends an array of commands to a running server instance.
 func postServerCommands(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	if running, err := s.Environment.IsRunning(c.Request.Context()); err != nil {
 		middleware.CaptureAndAbort(c, err)
@@ -140,7 +140,7 @@ func postServerCommands(c *gin.Context) {
 // external system, or triggered by the Panel itself when modifications are made
 // to the build of a server internally.
 func postServerSync(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	if err := s.Sync(); err != nil {
 		middleware.CaptureAndAbort(c, err)
@@ -151,7 +151,7 @@ func postServerSync(c *gin.Context) {
 
 // Performs a server installation in a background thread.
 func postServerInstall(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	go func(s *server.Server) {
 		s.Log().Info("syncing server state with remote source before executing installation process")
@@ -170,7 +170,7 @@ func postServerInstall(c *gin.Context) {
 
 // Reinstalls a server.
 func postServerReinstall(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	if s.ExecutingPowerAction() {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
@@ -207,6 +207,9 @@ func deleteServer(c *gin.Context) {
 	s.Events().Publish(server.DeletedEvent, nil)
 
 	s.CleanupForDestroy()
+
+	// Best-effort: remove nginx reverse-proxy sites tagged for this server.
+	cleanupServerProxies(s)
 
 	// Remove any pending remote file downloads for the server.
 	for _, dl := range downloader.ByServer(s.ID()) {

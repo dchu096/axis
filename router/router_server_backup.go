@@ -58,6 +58,7 @@ func postServerBackup(c *gin.Context) {
 	case backup.LocalBackupAdapter:
 		adapter = backup.NewLocal(client, backupUuid, data.Ignore)
 	case backup.S3BackupAdapter:
+		// Multipart single-archive upload to the panel bucket (R2/S3/…).
 		adapter = backup.NewS3(client, backupUuid, data.Ignore)
 	default:
 		middleware.CaptureAndAbort(c, errors.New("router/backups: provided adapter is not valid: "+string(data.Adapter)))
@@ -85,9 +86,9 @@ func postServerRestoreBackup(c *gin.Context) {
 	logger := middleware.ExtractLogger(c)
 
 	var data struct {
-		Adapter            backup.AdapterType `binding:"required,oneof=wings s3" json:"adapter"`
-		TruncateDirectory  bool               `json:"truncate_directory"`
-		DownloadUrl        string             `json:"download_url"`
+		Adapter           backup.AdapterType `binding:"required,oneof=wings s3" json:"adapter"`
+		TruncateDirectory bool               `json:"truncate_directory"`
+		DownloadUrl       string             `json:"download_url"`
 	}
 	if err := c.BindJSON(&data); err != nil {
 		return
@@ -96,11 +97,7 @@ func postServerRestoreBackup(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if data.Adapter == backup.S3BackupAdapter && data.DownloadUrl == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "The download_url field is required when the backup adapter is set to S3."})
-		return
-	}
-	if data.Adapter == backup.S3BackupAdapter {
+	if data.Adapter == backup.S3BackupAdapter && data.DownloadUrl != "" {
 		if err := validateBackupDownloadUrl(data.DownloadUrl); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -136,13 +133,20 @@ func postServerRestoreBackup(c *gin.Context) {
 			if err := s.RestoreBackup(b, nil); err != nil {
 				logger.WithField("error", err).Error("failed to restore local backup to server")
 			}
-			s.Events().Publish(server.DaemonMessageEvent, "Completed server restoration from local backup.")
+			s.Events().Publish(server.DaemonMessageEvent, "Restored this server from a local backup.")
 			s.Events().Publish(server.BackupRestoreCompletedEvent, "")
 			logger.Info("completed server restoration from local backup")
 			s.SetRestoring(false)
 		}(s, b, logger)
 		hasError = false
 		c.Status(http.StatusAccepted)
+		return
+	}
+
+	if data.DownloadUrl == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+			"error": "The S3 backup adapter requires a download_url for restoration.",
+		})
 		return
 	}
 
@@ -171,17 +175,17 @@ func postServerRestoreBackup(c *gin.Context) {
 	if !isSupportedBackupRestoreContentType(res.Header.Get("Content-Type")) {
 		_ = res.Body.Close()
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-			"error": "The provided backup link is not a supported content type. \"" + res.Header.Get("Content-Type") + "\" is not application/x-gzip.",
+			"error": "The provided backup link is not a supported content type. \"" + res.Header.Get("Content-Type") + "\" is not a supported archive type.",
 		})
 		return
 	}
 
 	go func(s *server.Server, uuid string, logger *log.Entry) {
-		logger.Info("starting restoration process for server backup using S3 driver")
+		logger.Info("starting restoration process for server backup using S3 archive driver")
 		if err := s.RestoreBackup(backup.NewS3(client, uuid, ""), res.Body); err != nil {
 			logger.WithField("error", errors.WithStack(err)).Error("failed to restore remote S3 backup to server")
 		}
-		s.Events().Publish(server.DaemonMessageEvent, "Completed server restoration from S3 backup.")
+		s.Events().Publish(server.DaemonMessageEvent, "Restored this server from an S3 backup.")
 		s.Events().Publish(server.BackupRestoreCompletedEvent, "")
 		logger.Info("completed server restoration from S3 backup")
 		s.SetRestoring(false)
@@ -191,24 +195,27 @@ func postServerRestoreBackup(c *gin.Context) {
 	c.Status(http.StatusAccepted)
 }
 
-// deleteServerBackup deletes a local backup of a server.
+// deleteServerBackup deletes a local (or in-flight S3 temp) archive for a backup.
+// Object deletion for adapter:s3 is panel-side; Axis only clears on-disk temp/marker files.
 func deleteServerBackup(c *gin.Context) {
+	client := middleware.ExtractApiClient(c)
 	backupUuid, ok := parseBackupUuid(c, c.Param("backup"))
 	if !ok {
 		return
 	}
-	b, _, err := backup.LocateLocal(middleware.ExtractApiClient(c), backupUuid)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-				"error": "The requested backup was not found on this server.",
-			})
+
+	if b, _, err := backup.LocateLocal(client, backupUuid); err == nil {
+		if err := b.Remove(); err != nil && !errors.Is(err, os.ErrNotExist) {
+			middleware.CaptureAndAbort(c, err)
 			return
 		}
-		middleware.CaptureAndAbort(c, err)
+		c.Status(http.StatusNoContent)
 		return
 	}
-	if err := b.Remove(); err != nil && !errors.Is(err, os.ErrNotExist) {
+
+	// Incomplete S3 multipart backups may still have a local temp archive.
+	s3b := backup.NewS3(client, backupUuid, "")
+	if err := s3b.Remove(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		middleware.CaptureAndAbort(c, err)
 		return
 	}
@@ -331,7 +338,7 @@ func isSupportedBackupRestoreContentType(value string) bool {
 		mediaType = strings.TrimSpace(value)
 	}
 	switch strings.ToLower(mediaType) {
-	case "application/x-gzip", "application/gzip":
+	case "application/x-gzip", "application/gzip", "application/zstd", "application/octet-stream", "":
 		return true
 	default:
 		return false

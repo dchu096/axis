@@ -135,6 +135,10 @@ type SystemConfiguration struct {
 	// Directory where local backups will be stored on the machine.
 	BackupDirectory string `default:"/var/lib/pterodactyl/backups" json:"-" yaml:"backup_directory"`
 
+	// Directory where server shadow extractions are stored (sibling of volumes/backups).
+	// Shadow bytes do not count against a server's billed disk quota.
+	ShadowDirectory string `default:"/var/lib/pterodactyl/shadows" json:"-" yaml:"shadow_directory"`
+
 	// TmpDirectory specifies where temporary files for Pterodactyl installation processes
 	// should be created. This supports environments running docker-in-docker.
 	TmpDirectory string `default:"/tmp/pterodactyl" json:"-" yaml:"tmp_directory"`
@@ -281,14 +285,11 @@ type Backups struct {
 	// Defaults to 0 (unlimited)
 	WriteLimit int `default:"0" yaml:"write_limit"`
 
-	// CompressionLevel determines how much backups created by wings should be compressed.
-	//
-	// "none" -> no compression will be applied
-	// "best_speed" -> uses gzip level 1 for fast speed
-	// "best_compression" -> uses gzip level 9 for minimal disk space useage
-	//
-	// Defaults to "best_speed" (level 1)
-	CompressionLevel string `default:"best_speed" yaml:"compression_level"`
+	// ZstdLevel is the zstd compression level for backups and file-manager archives
+	// (typically 1–22). Defaults to 3 — a good balance for Minecraft-sized trees.
+	// New archives are always `.tar.zst` (gzip creation removed; legacy `.tar.gz`
+	// restore still works via magic-byte detect).
+	ZstdLevel int `default:"3" yaml:"zstd_level"`
 
 	// RestoreHostAllowlist allows specific hosts/IPs/CIDRs for S3 backup restore downloads
 	// that would otherwise be blocked (loopback/private). Empty = fail closed for private nets.
@@ -303,6 +304,23 @@ type Transfers struct {
 	//
 	// Defaults to 0 (unlimited)
 	DownloadLimit int `default:"0" yaml:"download_limit"`
+
+	// Method is the preferred transfer transport when the panel does not force one.
+	// Valid values: "tus" (default) or "archive".
+	Method string `default:"tus" yaml:"method"`
+
+	// Tus holds optional settings for the TUS 1.0 HTTPS transfer transport.
+	Tus TransfersTus `yaml:"tus"`
+}
+
+// TransfersTus configures the TUS resumable upload transport for server transfers.
+type TransfersTus struct {
+	// ChunkSize is the PATCH body size hint in bytes (default 64 MiB). Panel may also send tus.chunk_size.
+	ChunkSize int64 `default:"67108864" yaml:"chunk_size"`
+
+	// Spool is an optional directory for partial upload/download archives.
+	// Empty uses system.tmp_directory/transfers.
+	Spool string `yaml:"spool"`
 }
 
 type ConsoleThrottles struct {
@@ -334,7 +352,7 @@ type Configuration struct {
 	// if the debug flag is passed through the command line arguments.
 	Debug bool
 
-	AppName string `default:"Axis" json:"app_name" yaml:"app_name"`
+	AppName string `default:"Atlas" json:"app_name" yaml:"app_name"`
 
 	// A unique identifier for this node in the Panel.
 	Uuid string
@@ -670,6 +688,11 @@ func ConfigureDirectories() error {
 
 	log.WithField("path", _config.System.BackupDirectory).Debug("ensuring backup data directory exists")
 	if err := os.MkdirAll(_config.System.BackupDirectory, 0o700); err != nil {
+		return err
+	}
+
+	log.WithField("path", _config.System.ShadowDirectory).Debug("ensuring shadow data directory exists")
+	if err := os.MkdirAll(_config.System.ShadowDirectory, 0o700); err != nil {
 		return err
 	}
 

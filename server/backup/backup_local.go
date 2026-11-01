@@ -7,7 +7,6 @@ import (
 
 	"emperror.dev/errors"
 	"github.com/juju/ratelimit"
-	"github.com/mholt/archives"
 
 	"github.com/0x7d8/wings/config"
 	"github.com/0x7d8/wings/remote"
@@ -22,7 +21,7 @@ var _ BackupInterface = (*LocalBackup)(nil)
 
 func NewLocal(client remote.Client, uuid string, ignore string) *LocalBackup {
 	return &LocalBackup{
-		Backup{
+		Backup: Backup{
 			client:  client,
 			Uuid:    uuid,
 			Ignore:  ignore,
@@ -38,16 +37,24 @@ func LocateLocal(client remote.Client, uuid string) (*LocalBackup, os.FileInfo, 
 	if err := b.validateIdentifier(); err != nil {
 		return nil, nil, err
 	}
-	st, err := os.Stat(b.Path())
-	if err != nil {
-		return nil, nil, err
-	}
 
-	if st.IsDir() {
-		return nil, nil, errors.New("invalid archive, is directory")
+	var lastErr error
+	for _, p := range b.candidatePaths() {
+		st, err := os.Stat(p)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if st.IsDir() {
+			return nil, nil, errors.New("invalid archive, is directory")
+		}
+		b.foundPath = p
+		return b, st, nil
 	}
-
-	return b, st, nil
+	if lastErr == nil {
+		lastErr = os.ErrNotExist
+	}
+	return nil, nil, lastErr
 }
 
 // Remove removes a backup from the system.
@@ -55,7 +62,21 @@ func (b *LocalBackup) Remove() error {
 	if err := b.validateIdentifier(); err != nil {
 		return err
 	}
-	return os.Remove(b.Path())
+	err := os.Remove(b.Path())
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, p := range b.candidatePaths() {
+		if p == b.Path() {
+			continue
+		}
+		if rerr := os.Remove(p); rerr == nil || errors.Is(rerr, os.ErrNotExist) {
+			return nil
+		} else {
+			return rerr
+		}
+	}
+	return err
 }
 
 // WithLogContext attaches additional context to the log output for this backup.
@@ -105,16 +126,5 @@ func (b *LocalBackup) Restore(ctx context.Context, _ io.Reader, callback Restore
 	if writeLimit := int64(config.Get().System.Backups.WriteLimit * 1024 * 1024); writeLimit > 0 {
 		reader = ratelimit.Reader(f, ratelimit.NewBucketWithRate(float64(writeLimit), writeLimit))
 	}
-	if err := format.Extract(ctx, reader, func(ctx context.Context, f archives.FileInfo) error {
-		r, err := f.Open()
-		if err != nil {
-			return err
-		}
-		defer r.Close()
-
-		return callback(f.NameInArchive, f.FileInfo, r)
-	}); err != nil {
-		return err
-	}
-	return nil
+	return extractArchive(ctx, reader, callback)
 }

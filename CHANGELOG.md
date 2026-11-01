@@ -1,5 +1,106 @@
 # Changelog
 
+## axis-1.0.10
+### Added
+* Server Shadow API — materialize a backup into `{shadow_directory}/{server_uuid}/` for browse/diff/promote without touching the live volume or starting a container (`/api/servers/:server/shadow/*`; panel callbacks via `POST /api/remote/shadows/{uuid}`)
+
+## axis-1.0.9
+### Added
+* `GET /api/servers/:server/files/disk-usage` — TreeSize-style recursive size tree for Atlas Analytics (`directory`, `depth`; no symlink follow; skip unreadable dirs)
+
+## axis-1.0.8
+### Changed
+* Drop embedded Kopia for S3 backups — multipart single-archive uploads (`.tar.zst`; legacy `.tar.gz` still restorable)
+* `adapter: s3` uses `NewS3` multipart again; no `/api/remote/backups/repository` calls
+* Backups and file-manager compress always use **zstd** (`.tar.zst` / `application/zstd`); removed `system.backups.format` and `compression_level`
+* Restore still detects gzip vs zstd from magic bytes for legacy objects; S3 restore requires `download_url`
+* Directory listings emit Atlas-compatible MIME types for common archives (zip, 7z, rar, tar.*, zstd, xz, bz2, …) so the file manager can offer decompress
+
+### Notes
+* Atlas: `APP_BACKUP_DRIVER=s3`, `BACKUP_DEDUPE=off`; object keys `{server}/{backup}.tar.zst`
+* Ops: drop `format:` / `compression_level:` from node `config.yml`; only `zstd_level` remains
+
+## axis-1.0.7
+### Changed
+* Kopia is **embedded** in Axis (Go library) — no separate `kopia` CLI install on nodes
+* Removed `system.backups.kopia_binary` config
+
+### Notes
+* Operators only deploy Axis; Atlas still supplies repo credentials via `GET /api/remote/backups/repository`
+* Superseded: Kopia path dropped; use multipart `.tar.zst`
+
+## axis-1.0.6
+### Added
+* Kopia-backed S3 backups: `adapter: s3` creates/restores/deletes Kopia snapshots in the panel bucket (S3/R2/…)
+* `GET /api/remote/backups/repository` client — credentials stay on Atlas; optional `system.backups.kopia_binary`
+* Backup download exports a Kopia snapshot to a temporary `.tar.gz` when no local archive exists
+
+### Changed
+* S3 backup create no longer builds multipart `.tar.gz` uploads; requires Kopia CLI on the node + Atlas repository API
+
+### Notes
+* Superseded: Kopia path dropped; use multipart `.tar.zst`
+* Local `adapter: wings` archives are unchanged
+
+## axis-1.0.5
+### Added
+* Chunked file uploads: `POST /api/servers/:server/files/merge-chunks` merges `.upload-tmp` sessions on-disk
+* Background cleaner for abandoned `.upload-tmp` sessions (30m TTL)
+* Directory listings hide `.upload-tmp` from the panel file manager
+
+### Changed
+* Directory listings resolve MIME from file extension only (no per-file content sniff)
+* Chunk merge opens files without MIME sniffing
+* Panel User-Agent / `axis version` / diagnostics branding say Axis instead of Wings
+
+### Notes
+* Per-request `api.upload_limit` still applies to each chunk; Atlas must split/upload/merge for large files
+* `/contents` and downloads still content-sniff MIME when opening a single file
+
+## axis-1.0.4
+### Added
+* TUS 1.0 HTTPS transfer transport (default): resumable `POST/HEAD/PATCH/DELETE /api/transfers/tus`
+* Archive spool + sha256 in TUS `Upload-Metadata`; destination verifies before extract
+* Config `system.transfers.method: tus|archive` and optional `system.transfers.tus.{chunk_size,spool}`
+* Failure notifications can include `{ "message": "…" }` for Atlas Manage “last failure”
+
+### Changed
+* Default transfer method is **tus** (`archive` remains the fallback)
+* Unsupported panel methods (including legacy `rsync`) are rejected with HTTP 400 — no silent coerce/fallback
+* Legacy multipart `POST /api/transfers` kept as fallback when TUS is unsupported on dest
+
+### Removed
+* Rsync / SSH transfer transport (`system.transfers.rsync.*`, prepare/rsync/abort routes, `rsync` binary path)
+
+### Notes
+* No node↔node SSH keys required for transfers
+* After upgrading all nodes, remove leftover `/etc/axis/transfer_key` and transfer entries in `authorized_keys`
+
+## axis-1.0.3
+### Added
+* Server transfer progress heartbeats to the panel (`POST .../transfer/progress`) with Atlas stage strings (`stopping`, `preparing`, `copying`, …)
+* Rsync transfer transport (preferred when available) with archive multipart fallback
+* Dest prepare/verify endpoints: `POST /api/transfers/prepare`, `POST /api/transfers/rsync`
+* Dest abort endpoint: `POST /api/transfers/abort` (JWT) — clears a prepared rsync volume before archive fallback or hard failure
+* Do not archive-fallback after a successful prepare (that left transfers stuck after “streamed” with no deploy)
+* Progress heartbeats include `method` so Atlas shows rsync vs archive accurately
+* Config knobs under `system.transfers` (`method`, `rsync.enabled`, SSH identity, bandwidth limit)
+
+### Notes
+* Node↔node rsync uses SSH keys on the daemon (`system.transfers.rsync.identity_file`), not panel secrets
+* Keep archive path for stock Wings / when rsync or SSH is unavailable
+
+## axis-1.0.2
+### Added
+* Locked-down DevTools sidecar (contract `devtools.v1`)
+* DevTools sidecar MOTD on interactive login (`clear` then `/etc/motd`); `fastfetch` available to run manually
+* Axis branding (binary `axis`, version `axis-1.0.2`)
+* CPU burst token bucket: live Docker CPUQuota clamp between `cpu_baseline` and `cpu_limit`, reports `cpu_burst_remaining` on utilization / websocket stats
+* Proxy create returns `{ "ssl": { "issued": true } }` on SSL success and surfaces real Let's Encrypt errors
+
+### Notes
+* CPU burst requires Atlas panel fields on `build` (`cpu_baseline`, `cpu_burst`, …). Old panels omit them → static `cpu_limit` as before.
+
 ## axis-1.0.0
 ### Security (ported from upstream Wings ≤ v1.13.3)
 * **GHSA-hfvm-879c-xgmm / GHSA-8j54-xcwx-597p** — SFTP streaming writes enforce disk quotas (`quotaFile` + fresh open-time check); SFTP denied during install/transfer/restore
@@ -23,10 +124,6 @@
 * `github.com/buger/jsonparser` → v1.1.2
 * `github.com/quic-go/quic-go` → v0.59.1 (transitive via gin)
 * `golang.org/x/crypto` → v0.57.0 (and related `x/*` bumps)
-
-### Added
-* Locked-down DevTools sidecar (`docs/devtools-sidecar.md`, contract `devtools.v1`)
-* Axis branding (binary `axis`, version `axis-1.0.0`)
 
 ### Notes
 * Upload/download JWTs must include a `scope` claim (`file-upload`, `file-download`, `backup-download`) as issued by Panel ≥ 1.12.3 / Atlas equivalents.

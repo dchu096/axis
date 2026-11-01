@@ -3,6 +3,7 @@ package router
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -84,7 +85,7 @@ func getServerFileContents(c *gin.Context) {
 
 // Returns the contents of a directory for a server.
 func getServerListDirectory(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 	dir := c.Query("directory")
 	if stats, err := s.Filesystem().ListDirectory(dir); err != nil {
 		// If the error is that the folder does not exist return a 404 error.
@@ -97,8 +98,47 @@ func getServerListDirectory(c *gin.Context) {
 
 		middleware.CaptureAndAbort(c, err)
 	} else {
-		c.JSON(http.StatusOK, stats)
+		filtered := stats[:0]
+		for _, st := range stats {
+			if st.Name() != uploadTmpDir {
+				filtered = append(filtered, st)
+			}
+		}
+		c.JSON(http.StatusOK, filtered)
 	}
+}
+
+// getServerDiskUsage returns a TreeSize-style recursive size tree for a server
+// directory. Atlas Analytics uses this instead of crawling list-directory.
+func getServerDiskUsage(c *gin.Context) {
+	s := middleware.ExtractServer(c)
+	directory := c.Query("directory")
+	depth := 6
+	if raw := c.Query("depth"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			depth = parsed
+		}
+	}
+
+	tree, err := s.Filesystem().DiskUsageTree(directory, depth)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+				"error": "The requested directory was not found on the server.",
+			})
+			return
+		}
+		if errors.Is(err, filesystem.ErrNotDirectory) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"error": "The requested path is not a directory.",
+			})
+			return
+		}
+		middleware.CaptureAndAbort(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, tree)
 }
 
 type renameFile struct {
@@ -108,7 +148,7 @@ type renameFile struct {
 
 // Renames (or moves) files for a server.
 func putServerRenameFiles(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	var data struct {
 		Root  string       `json:"root"`
@@ -176,7 +216,7 @@ func putServerRenameFiles(c *gin.Context) {
 
 // Copies a server file.
 func postServerCopyFile(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	var data struct {
 		Location string `json:"location"`
@@ -200,7 +240,7 @@ func postServerCopyFile(c *gin.Context) {
 
 // Deletes files from a server.
 func postServerDeleteFiles(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	var data struct {
 		Root  string   `json:"root"`
@@ -245,7 +285,7 @@ func postServerDeleteFiles(c *gin.Context) {
 
 // Writes the contents of the request to a file on a server.
 func postServerWriteFile(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	f := c.Query("file")
 	f = "/" + strings.TrimLeft(f, "/")
@@ -283,7 +323,7 @@ func postServerWriteFile(c *gin.Context) {
 // call this once to get current downloads, and then listen to targeted websocket events
 // with the current progress for everything.
 func getServerPullingFiles(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 	c.JSON(http.StatusOK, gin.H{
 		"downloads": downloader.ByServer(s.ID()),
 	})
@@ -291,7 +331,7 @@ func getServerPullingFiles(c *gin.Context) {
 
 // Writes the contents of the remote URL to a file on a server.
 func postServerPullRemoteFile(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 	var data struct {
 		// Deprecated
 		Directory  string `binding:"required_without=RootPath,omitempty" json:"directory"`
@@ -376,7 +416,7 @@ func postServerPullRemoteFile(c *gin.Context) {
 
 // Stops a remote file download if it exists and belongs to this server.
 func deleteServerPullRemoteFile(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 	if dl := downloader.ByID(c.Param("download")); dl != nil && dl.BelongsTo(s) {
 		dl.Cancel()
 	}
@@ -385,7 +425,7 @@ func deleteServerPullRemoteFile(c *gin.Context) {
 
 // Create a directory on a server.
 func postServerCreateDirectory(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	var data struct {
 		Name string `json:"name"`
@@ -412,7 +452,7 @@ func postServerCreateDirectory(c *gin.Context) {
 }
 
 func postServerCompressFiles(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	var data struct {
 		RootPath string   `json:"root"`
@@ -445,7 +485,7 @@ func postServerCompressFiles(c *gin.Context) {
 
 	c.JSON(http.StatusOK, &filesystem.Stat{
 		FileInfo: f,
-		Mimetype: "application/tar+gzip",
+		Mimetype: "application/zstd",
 	})
 }
 
@@ -501,7 +541,7 @@ type chmodFile struct {
 var errInvalidFileMode = errors.New("invalid file mode")
 
 func postServerChmodFile(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	var data struct {
 		Root  string      `json:"root"`
@@ -598,6 +638,7 @@ func postServerUploadFiles(c *gin.Context) {
 	}
 
 	directory := c.Query("directory")
+	isChunk := strings.HasPrefix(strings.TrimPrefix(directory, "/"), uploadTmpDir+"/")
 
 	maxFileSize := config.Get().Api.UploadLimit
 	maxFileSizeBytes := maxFileSize * 1024 * 1024
@@ -618,7 +659,7 @@ func postServerUploadFiles(c *gin.Context) {
 		if err := handleFileUpload(filepath.Join(directory, header.Filename), s, header); err != nil {
 			middleware.CaptureAndAbort(c, err)
 			return
-		} else {
+		} else if !isChunk {
 			s.SaveActivity(s.NewRequestActivity(token.UserUuid, c.ClientIP()), server.ActivityFileUploaded, models.ActivityMeta{
 				"file":      header.Filename,
 				"directory": filepath.Clean(directory),
@@ -642,4 +683,75 @@ func handleFileUpload(p string, s *server.Server, header *multipart.FileHeader) 
 		return err
 	}
 	return nil
+}
+
+// postServerMergeChunks merges previously uploaded chunk files into the final
+// destination file entirely on disk — no data leaves the daemon.
+func postServerMergeChunks(c *gin.Context) {
+	s := middleware.ExtractServer(c)
+
+	var data struct {
+		Root        string `json:"root"`
+		Filename    string `json:"filename"`
+		SessionID   string `json:"session_id"`
+		TotalChunks int    `json:"total_chunks"`
+		UserUUID    string `json:"user_uuid"`
+		ClientIP    string `json:"client_ip"`
+	}
+	if err := c.BindJSON(&data); err != nil {
+		return
+	}
+
+	if data.Filename == "" || data.SessionID == "" || data.TotalChunks <= 0 {
+		c.AbortWithStatusJSON(http.StatusUnprocessableEntity, gin.H{
+			"error": "Missing required parameters.",
+		})
+		return
+	}
+
+	fs := s.Filesystem()
+	finalPath := path.Join(data.Root, data.Filename)
+
+	if err := fs.IsIgnored(finalPath); err != nil {
+		middleware.CaptureAndAbort(c, err)
+		return
+	}
+
+	readers := make([]io.Reader, 0, data.TotalChunks)
+	closers := make([]io.Closer, 0, data.TotalChunks)
+	var totalSize int64
+
+	defer func() {
+		for _, cl := range closers {
+			_ = cl.Close()
+		}
+	}()
+
+	for i := 0; i < data.TotalChunks; i++ {
+		chunkPath := fmt.Sprintf("%s/%s/%d", uploadTmpDir, data.SessionID, i)
+		f, st, err := fs.OpenFile(chunkPath)
+		if err != nil {
+			middleware.CaptureAndAbort(c, err)
+			return
+		}
+		closers = append(closers, f)
+		readers = append(readers, f)
+		totalSize += st.Size()
+	}
+
+	if err := fs.Write(finalPath, io.MultiReader(readers...), totalSize, 0o644); err != nil {
+		middleware.CaptureAndAbort(c, err)
+		return
+	}
+
+	_ = fs.Delete(fmt.Sprintf("%s/%s", uploadTmpDir, data.SessionID))
+
+	if data.UserUUID != "" {
+		s.SaveActivity(s.NewRequestActivity(data.UserUUID, data.ClientIP), server.ActivityFileUploaded, models.ActivityMeta{
+			"file":      data.Filename,
+			"directory": filepath.Clean(data.Root),
+		})
+	}
+
+	c.Status(http.StatusNoContent)
 }

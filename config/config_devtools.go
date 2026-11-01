@@ -1,7 +1,6 @@
 package config
 
 // DevToolsConfiguration controls the locked-down per-server developer sidecar.
-// See docs/devtools-sidecar.md for the full contract.
 type DevToolsConfiguration struct {
 	// Enabled is the node-wide master switch. When false, all DevTools APIs fail closed.
 	Enabled bool `default:"true" json:"enabled" yaml:"enabled"`

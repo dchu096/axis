@@ -170,7 +170,29 @@ type BackupRequest struct {
 	Parts        []BackupPart `json:"parts"`
 }
 
+// ShadowStatusRequest is posted to the Panel while a server shadow is being
+// materialized from a backup, and again when it becomes ready or fails.
+type ShadowStatusRequest struct {
+	State           string `json:"state"`
+	ProgressPercent *int   `json:"progress_percent,omitempty"`
+	Bytes           *int64 `json:"bytes,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
 type InstallStatusRequest struct {
 	Successful bool `json:"successful"`
 	Reinstall  bool `json:"reinstall"`
+}
+
+// TransferProgressRequest is posted mid-flight so the panel can track transfer
+// stages and heartbeats without flipping successful/node_id.
+type TransferProgressRequest struct {
+	Status      string `json:"status"`
+	Progress    *int   `json:"progress,omitempty"`
+	BytesCopied uint64 `json:"bytes_copied,omitempty"`
+	BytesTotal  uint64 `json:"bytes_total,omitempty"`
+	Message     string `json:"message,omitempty"`
+	// Method is the transport actually in use (tus|archive). Sent so the panel
+	// can correct transfer_method when Axis falls back from tus to archive.
+	Method string `json:"method,omitempty"`
 }

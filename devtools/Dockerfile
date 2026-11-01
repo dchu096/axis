@@ -6,6 +6,7 @@ RUN apk add --no-cache \
     bash \
     ca-certificates \
     curl \
+    fastfetch \
     git \
     gzip \
     jq \
@@ -17,6 +18,10 @@ RUN apk add --no-cache \
     vim \
     wget \
     && rm -rf /var/cache/apk/*
+
+COPY motd /etc/motd
+COPY profile.d/00-axis-devtools.sh /etc/profile.d/00-axis-devtools.sh
+COPY fastfetch/config.jsonc /etc/fastfetch/config.jsonc
 
 # Non-root friendly; Axis remaps to the configured pterodactyl/axis UID at runtime.
 WORKDIR /home/container

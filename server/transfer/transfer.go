@@ -2,11 +2,13 @@ package transfer
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/apex/log"
 	"github.com/mitchellh/colorstring"
 
+	"github.com/0x7d8/wings/remote"
 	"github.com/0x7d8/wings/server"
 	"github.com/0x7d8/wings/system"
 )
@@ -53,6 +55,20 @@ type Transfer struct {
 
 	// archive is the archive that is being created for the transfer.
 	archive *Archive
+
+	// client is the panel API client used for progress heartbeats.
+	client remote.Client
+
+	// Method is the transport used for this transfer (tus|archive), for logs/heartbeats.
+	Method string
+
+	// failureMessage is an optional human-readable reason sent with panel failure.
+	failureMessage string
+
+	// tusUploadURL / tusToken track an in-flight outgoing TUS upload for cancel cleanup.
+	tusUploadURL string
+	tusToken     string
+	tusBytesCopied atomic.Uint64
 }
 
 // New returns a new transfer instance for the given server.
@@ -125,4 +141,24 @@ func (t *Transfer) Log() *log.Entry {
 		return log.WithField("subsystem", "transfer")
 	}
 	return t.Server.Log().WithField("subsystem", "transfer")
+}
+
+// SetFailureMessage stores a reason included when notifying the panel of failure.
+func (t *Transfer) SetFailureMessage(msg string) {
+	t.failureMessage = truncateMessage(msg)
+}
+
+// FailureMessage returns the last failure reason, if any.
+func (t *Transfer) FailureMessage() string {
+	return t.failureMessage
+}
+
+// AbortTusUpload best-effort DELETEs an in-flight outgoing TUS upload on the destination.
+func (t *Transfer) AbortTusUpload() {
+	if t.tusUploadURL == "" || t.tusToken == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_ = tusDelete(ctx, t.tusUploadURL, t.tusToken)
 }

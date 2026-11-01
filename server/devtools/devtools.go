@@ -27,7 +27,7 @@ const ContractVersion = "devtools.v1"
 
 // AllowlistedTools documents tools expected in the default sidecar image.
 var AllowlistedTools = []string{
-	"git", "curl", "wget", "unzip", "tar", "nano", "vim", "less", "jq",
+	"git", "curl", "wget", "unzip", "tar", "nano", "vim", "less", "jq", "fastfetch",
 }
 
 // State values reported to the panel.

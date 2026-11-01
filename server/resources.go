@@ -41,7 +41,17 @@ func (s *Server) Proc() ResourceUsage {
 // UpdateStats updates the current stats for the server's resource usage.
 func (ru *ResourceUsage) UpdateStats(stats environment.Stats) {
 	ru.mu.Lock()
+	// Preserve burst remaining across Docker stats refreshes; SampleCpuBurst owns it.
+	remaining := ru.CpuBurstRemaining
 	ru.Stats = stats
+	ru.CpuBurstRemaining = remaining
+	ru.mu.Unlock()
+}
+
+// SetCpuBurstRemaining sets the reported burst credit percent, or clears it when nil.
+func (ru *ResourceUsage) SetCpuBurstRemaining(v *float64) {
+	ru.mu.Lock()
+	ru.CpuBurstRemaining = v
 	ru.mu.Unlock()
 }
 
@@ -53,6 +63,7 @@ func (ru *ResourceUsage) Reset() {
 
 	ru.Memory = 0
 	ru.CpuAbsolute = 0
+	ru.CpuBurstRemaining = nil
 	ru.Uptime = 0
 	ru.Network.TxBytes = 0
 	ru.Network.RxBytes = 0

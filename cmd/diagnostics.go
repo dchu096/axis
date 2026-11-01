@@ -45,7 +45,7 @@ var diagnosticsArgs struct {
 func newDiagnosticsCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "diagnostics",
-		Short: "Collect and report information about this Wings instance to assist in debugging.",
+		Short: "Collect and report information about this Axis instance to assist in debugging.",
 		PreRun: func(cmd *cobra.Command, args []string) {
 			initConfig()
 			log.SetHandler(cli.Default)
@@ -95,9 +95,9 @@ func diagnosticsCmdRun(*cobra.Command, []string) {
 	dockerVersion, dockerInfo, dockerErr := getDockerInfo()
 
 	output := &strings.Builder{}
-	fmt.Fprintln(output, "Pterodactyl Wings - Diagnostics Report")
+	fmt.Fprintln(output, "Atlas Axis - Diagnostics Report")
 	printHeader(output, "Versions")
-	fmt.Fprintln(output, "               Wings:", system.Version)
+	fmt.Fprintln(output, "                Axis:", system.Version)
 	if dockerErr == nil {
 		fmt.Fprintln(output, "              Docker:", dockerVersion.Version)
 	}
@@ -108,7 +108,7 @@ func diagnosticsCmdRun(*cobra.Command, []string) {
 		fmt.Fprintln(output, "                  OS:", os)
 	}
 
-	printHeader(output, "Wings Configuration")
+	printHeader(output, "Axis Configuration")
 	if err := config.FromFile(config.DefaultLocation); err != nil {
 	}
 	cfg := config.Get()
@@ -127,6 +127,7 @@ func diagnosticsCmdRun(*cobra.Command, []string) {
 	fmt.Fprintln(output, "      Data Directory:", cfg.System.Data)
 	fmt.Fprintln(output, "   Archive Directory:", cfg.System.ArchiveDirectory)
 	fmt.Fprintln(output, "    Backup Directory:", cfg.System.BackupDirectory)
+	fmt.Fprintln(output, "    Shadow Directory:", cfg.System.ShadowDirectory)
 	fmt.Fprintln(output, "")
 	fmt.Fprintln(output, "            Username:", cfg.System.Username)
 	fmt.Fprintln(output, "         Server Time:", time.Now().Format(time.RFC1123Z))
@@ -165,7 +166,7 @@ func diagnosticsCmdRun(*cobra.Command, []string) {
 		fmt.Fprint(output, "Couldn't list containers: ", err)
 	}
 
-	printHeader(output, "Latest Wings Logs")
+	printHeader(output, "Latest Axis Logs")
 	if diagnosticsArgs.IncludeLogs {
 		p := "/var/log/pterodactyl/wings.log"
 		if cfg != nil {

@@ -29,8 +29,10 @@ type Client interface {
 	SetArchiveStatus(ctx context.Context, uuid string, successful bool) error
 	SetBackupStatus(ctx context.Context, backup string, data BackupRequest) error
 	SendRestorationStatus(ctx context.Context, backup string, successful bool) error
+	SetShadowStatus(ctx context.Context, shadowUUID string, data ShadowStatusRequest) error
 	SetInstallationStatus(ctx context.Context, uuid string, data InstallStatusRequest) error
-	SetTransferStatus(ctx context.Context, uuid string, successful bool) error
+	SetTransferStatusMessage(ctx context.Context, uuid string, successful bool, message string) error
+	SetTransferProgress(ctx context.Context, uuid string, data TransferProgressRequest) error
 	ValidateSftpCredentials(ctx context.Context, request SftpAuthRequest) (SftpAuthResponse, error)
 	SendActivityLogs(ctx context.Context, activity []models.Activity) error
 }
@@ -105,7 +107,7 @@ func (c *client) requestOnce(ctx context.Context, method, path string, body io.R
 		return nil, err
 	}
 
-	req.Header.Set("User-Agent", fmt.Sprintf("Pterodactyl Wings/v%s (id:%s)", system.Version, c.tokenId))
+	req.Header.Set("User-Agent", fmt.Sprintf("Atlas Axis/%s (id:%s)", system.Version, c.tokenId))
 	req.Header.Set("Accept", "application/vnd.pterodactyl.v1+json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s.%s", c.tokenId, c.token))

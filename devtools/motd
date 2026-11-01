@@ -1,0 +1,22 @@
+============================================================
+    /\
+   //\\     Atlas DevTools
+  //  \\    Developer Shell
+============================================================
+
+  Directory: /home/container (Server Files)
+
+  [Available Tools]
+  • Code & Transfer : git, curl, wget
+  • Archives        : tar, unzip, gzip
+  • File Editors    : nano, vim, less
+  • Utilities       : jq, motd
+
+  [Environment Restrictions]
+  • No package installs allowed.
+  • Executables on this volume are restricted (noexec).
+  • Idle sessions will pause the sidecar automatically.
+
+  Tip: Edit your configuration files here, then apply changes
+       by restarting the server via the main console.
+============================================================

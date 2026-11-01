@@ -48,7 +48,29 @@ type Limits struct {
 	// The percentage of CPU that this instance is allowed to consume relative to
 	// the host. A value of 200% represents complete utilization of two cores. This
 	// should be a value between 1 and THREAD_COUNT * 100.
+	// When CPU burst is enabled this is the hard ceiling (baseline + burst).
 	CpuLimit int64 `json:"cpu_limit"`
+
+	// Sustained CPU cap when burst credit is drained. Same units as CpuLimit
+	// (100 = one host core). Omitted/0 with CpuBurst == 0 means burst is off.
+	CpuBaseline int64 `json:"cpu_baseline"`
+
+	// Extra CPU percentage points above baseline that may be used while burst
+	// credit remains. 0 or omitted disables burst and keeps static CpuLimit.
+	CpuBurst int64 `json:"cpu_burst"`
+
+	// Seconds of full extra (CpuBurst) usage until the token bucket is empty.
+	// Defaults to 60 when unset and burst is enabled.
+	CpuBurstSeconds int64 `json:"cpu_burst_seconds"`
+
+	// Seconds at or below baseline to refill the bucket from empty to full.
+	// Defaults to 300 when unset and burst is enabled.
+	CpuBurstRechargeSeconds int64 `json:"cpu_burst_recharge_seconds"`
+
+	// appliedCpuQuota is the live Docker CPU % currently applied via
+	// ContainerUpdate. 0 means "use CpuLimit" (ceiling / non-burst default).
+	// Not part of the panel JSON payload.
+	appliedCpuQuota int64 `json:"-"`
 
 	// The amount of disk space in megabytes that a server is allowed to use.
 	DiskSpace int64 `json:"disk_space"`
@@ -57,6 +79,38 @@ type Limits struct {
 	Threads string `json:"threads"`
 
 	OOMDisabled bool `json:"oom_disabled"`
+}
+
+// BurstEnabled reports whether dynamic CPU burst clamping should run.
+func (l Limits) BurstEnabled() bool {
+	return l.CpuLimit > 0 && l.CpuBurst > 0 && l.CpuBaseline > 0
+}
+
+// BurstSeconds returns the configured drain window, or the panel default of 60.
+func (l Limits) BurstSeconds() int64 {
+	if l.CpuBurstSeconds > 0 {
+		return l.CpuBurstSeconds
+	}
+	return 60
+}
+
+// BurstRechargeSeconds returns the configured refill window, or the panel default of 300.
+func (l Limits) BurstRechargeSeconds() int64 {
+	if l.CpuBurstRechargeSeconds > 0 {
+		return l.CpuBurstRechargeSeconds
+	}
+	return 300
+}
+
+// cpuQuotaPercent is the CPU percentage applied to Docker for this build.
+func (l Limits) cpuQuotaPercent() int64 {
+	if l.CpuLimit <= 0 {
+		return 0
+	}
+	if l.BurstEnabled() && l.appliedCpuQuota > 0 {
+		return l.appliedCpuQuota
+	}
+	return l.CpuLimit
 }
 
 // ConvertedCpuLimit converts the CPU limit for a server build into a number
@@ -115,9 +169,12 @@ func (l Limits) AsContainerResources() container.Resources {
 	// If the CPU Limit is not set, don't send any of these fields through. Providing
 	// them seems to break some Java services that try to read the available processors.
 	//
+	// When burst is enabled, cpuQuotaPercent() may return the baseline while credit
+	// is drained, otherwise the hard ceiling (cpu_limit).
+	//
 	// @see https://github.com/pterodactyl/panel/issues/3988
-	if l.CpuLimit > 0 {
-		resources.CPUQuota = l.CpuLimit * 1_000
+	if quota := l.cpuQuotaPercent(); quota > 0 {
+		resources.CPUQuota = quota * 1_000
 		resources.CPUPeriod = 100_000
 		resources.CPUShares = 1024
 	}

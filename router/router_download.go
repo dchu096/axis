@@ -2,7 +2,6 @@ package router
 
 import (
 	"bufio"
-	"errors"
 	"net/http"
 	"os"
 	"strconv"
@@ -42,22 +41,14 @@ func getDownloadBackup(c *gin.Context) {
 		return
 	}
 
-	// Locate the backup on the local disk.
 	b, st, err := backup.LocateLocal(client, token.BackupUuid)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-				"error": "The requested backup was not found on this server.",
-			})
-			return
-		}
-
-		middleware.CaptureAndAbort(c, err)
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+			"error": "The requested backup was not found on this server.",
+		})
 		return
 	}
 
-	// The use of `os` here is safe as backups are not stored within server
-	// accessible directories.
 	f, err := os.Open(b.Path())
 	if err != nil {
 		middleware.CaptureAndAbort(c, err)
@@ -68,7 +59,6 @@ func getDownloadBackup(c *gin.Context) {
 	c.Header("Content-Length", strconv.Itoa(int(st.Size())))
 	c.Header("Content-Disposition", "attachment; filename="+strconv.Quote(st.Name()))
 	c.Header("Content-Type", "application/octet-stream")
-
 	_, _ = bufio.NewReader(f).WriteTo(c.Writer)
 }
 

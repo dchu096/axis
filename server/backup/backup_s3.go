@@ -12,7 +12,6 @@ import (
 	"emperror.dev/errors"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/juju/ratelimit"
-	"github.com/mholt/archives"
 
 	"github.com/0x7d8/wings/config"
 	"github.com/0x7d8/wings/remote"
@@ -41,7 +40,21 @@ func (s *S3Backup) Remove() error {
 	if err := s.validateIdentifier(); err != nil {
 		return err
 	}
-	return os.Remove(s.Path())
+	err := os.Remove(s.Path())
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, p := range s.candidatePaths() {
+		if p == s.Path() {
+			continue
+		}
+		if rerr := os.Remove(p); rerr == nil || errors.Is(rerr, os.ErrNotExist) {
+			return nil
+		} else {
+			return rerr
+		}
+	}
+	return err
 }
 
 // WithLogContext attaches additional context to the log output for this backup.
@@ -85,13 +98,11 @@ func (s *S3Backup) Generate(ctx context.Context, fsys *filesystem.Filesystem, ig
 	return ad, nil
 }
 
-// Restore will read from the provided reader assuming that it is a gzipped
-// tar reader. When a file is encountered in the archive the callback function
-// will be triggered. If the callback returns an error the entire process is
-// stopped, otherwise this function will run until all files have been written.
-//
-// This restoration uses a workerpool to use up to the number of CPUs available
-// on the machine when writing files to the disk.
+// Restore will read from the provided reader assuming that it is a compressed
+// tar archive (gzip or zstd). When a file is encountered in the archive the
+// callback function will be triggered. If the callback returns an error the
+// entire process is stopped, otherwise this function will run until all files
+// have been written.
 func (s *S3Backup) Restore(ctx context.Context, r io.Reader, callback RestoreCallback) error {
 	reader := r
 	// Steal the logic we use for making backups which will be applied when restoring
@@ -99,18 +110,7 @@ func (s *S3Backup) Restore(ctx context.Context, r io.Reader, callback RestoreCal
 	if writeLimit := int64(config.Get().System.Backups.WriteLimit * 1024 * 1024); writeLimit > 0 {
 		reader = ratelimit.Reader(r, ratelimit.NewBucketWithRate(float64(writeLimit), writeLimit))
 	}
-	if err := format.Extract(ctx, reader, func(ctx context.Context, f archives.FileInfo) error {
-		r, err := f.Open()
-		if err != nil {
-			return err
-		}
-		defer r.Close()
-
-		return callback(f.NameInArchive, f.FileInfo, r)
-	}); err != nil {
-		return err
-	}
-	return nil
+	return extractArchive(ctx, reader, callback)
 }
 
 // Generates the remote S3 request and begins the upload.
@@ -202,7 +202,7 @@ func (fu *s3FileUploader) uploadPart(ctx context.Context, part string, size int6
 
 	r.ContentLength = size
 	r.Header.Add("Content-Length", strconv.Itoa(int(size)))
-	r.Header.Add("Content-Type", "application/x-gzip")
+	r.Header.Add("Content-Type", ArchiveContentType())
 
 	// Limit the reader to the size of the part.
 	r.Body = Reader{Reader: io.LimitReader(fu.ReadCloser, size)}

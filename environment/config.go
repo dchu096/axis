@@ -33,8 +33,29 @@ func NewConfiguration(s Settings, envVars []string) *Configuration {
 // automatically push those changes to the environment.
 func (c *Configuration) SetSettings(s Settings) {
 	c.mu.Lock()
+	// Preserve the live burst clamp across panel syncs so InSituUpdate does not
+	// accidentally restore the ceiling while credit is still drained.
+	applied := c.settings.Limits.appliedCpuQuota
 	c.settings = s
+	if s.Limits.BurstEnabled() && applied > 0 {
+		c.settings.Limits.appliedCpuQuota = applied
+	}
 	c.mu.Unlock()
+}
+
+// SetAppliedCpuQuota sets the live Docker CPU percentage used by AsContainerResources
+// when burst is enabled. Pass 0 to fall back to cpu_limit (ceiling).
+func (c *Configuration) SetAppliedCpuQuota(quota int64) {
+	c.mu.Lock()
+	c.settings.Limits.appliedCpuQuota = quota
+	c.mu.Unlock()
+}
+
+// AppliedCpuQuota returns the live Docker CPU percentage override, or 0 if unset.
+func (c *Configuration) AppliedCpuQuota() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.settings.Limits.appliedCpuQuota
 }
 
 // Updates the environment variables associated with this environment by replacing the entire

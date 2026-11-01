@@ -21,6 +21,7 @@ import (
 	"github.com/0x7d8/wings/remote"
 	"github.com/0x7d8/wings/server/devtools"
 	"github.com/0x7d8/wings/server/filesystem"
+	"github.com/0x7d8/wings/server/shadow"
 	"github.com/0x7d8/wings/system"
 )
 
@@ -45,6 +46,7 @@ type Server struct {
 	crasher CrashHandler
 
 	resources   ResourceUsage
+	cpuBurst    *cpuBurstController
 	Environment environment.ProcessEnvironment `json:"-"`
 
 	fs *filesystem.Filesystem
@@ -79,9 +81,13 @@ type Server struct {
 	logSink     *system.SinkPool
 	installSink *system.SinkPool
 
-	// Locked-down developer sidecar (see docs/devtools-sidecar.md).
+	// Locked-down developer sidecar.
 	devtoolsOnce sync.Once
 	devtoolsMgr  *devtools.Manager
+
+	// Files-only shadow materialization (backup extract outside live volume).
+	shadowOnce sync.Once
+	shadowMgr  *shadow.Manager
 }
 
 // New returns a new server instance with a context and all of the default
@@ -92,6 +98,7 @@ func New(client remote.Client) (*Server, error) {
 		ctx:          ctx,
 		ctxCancel:    &cancel,
 		client:       client,
+		cpuBurst:     newCpuBurstController(),
 		installing:   system.NewAtomicBool(false),
 		transferring: system.NewAtomicBool(false),
 		restoring:    system.NewAtomicBool(false),
@@ -122,6 +129,9 @@ func (s *Server) CleanupForDestroy() {
 	s.powerLock.Destroy()
 	if mgr := s.DevTools(); mgr != nil {
 		_ = mgr.Destroy(context.Background())
+	}
+	if mgr := s.Shadow(); mgr != nil {
+		_ = mgr.Delete()
 	}
 }
 
@@ -337,6 +347,15 @@ func (s *Server) SetDevToolsEnabled(enabled bool) {
 	s.cfg.SetDevToolsEnabled(enabled)
 }
 
+// Shadow returns the per-server shadow manager used to materialize backups into
+// a disposable files-only tree outside the live volume.
+func (s *Server) Shadow() *shadow.Manager {
+	s.shadowOnce.Do(func() {
+		s.shadowMgr = shadow.New(s.ID(), s.client, s.fs, s.Log().WithField("subsystem", "shadow"))
+	})
+	return s.shadowMgr
+}
+
 // EnsureDataDirectoryExists ensures that the data directory for the server
 // instance exists.
 func (s *Server) EnsureDataDirectoryExists() error {
@@ -372,8 +391,12 @@ func (s *Server) OnStateChange() {
 	}
 
 	// Reset the resource usage to 0 when the process fully stops so that all the UI
-	// views in the Panel correctly display 0.
+	// views in the Panel correctly display 0. Burst credit is also reset so the next
+	// boot starts with a full bucket.
 	if st == environment.ProcessOfflineState {
+		if s.cpuBurst != nil {
+			s.cpuBurst.Reset()
+		}
 		s.resources.Reset()
 		s.Events().Publish(StatsEvent, s.Proc())
 	}

@@ -84,6 +84,7 @@ func (s *Server) Backup(b backup.BackupInterface) error {
 			"checksum":      "",
 			"checksum_type": "sha1",
 			"file_size":     0,
+			"error":         err.Error(),
 		})
 
 		return errors.WrapIf(err, "backup: error while generating server backup")
@@ -95,7 +96,15 @@ func (s *Server) Backup(b backup.BackupInterface) error {
 		_ = b.Remove()
 
 		s.Log().WithField("error", notifyError).Info("failed to notify panel of successful backup state")
-		return err
+		s.Events().Publish(BackupCompletedEvent+":"+b.Identifier(), map[string]interface{}{
+			"uuid":          b.Identifier(),
+			"is_successful": false,
+			"checksum":      "",
+			"checksum_type": "sha1",
+			"file_size":     0,
+			"error":         notifyError.Error(),
+		})
+		return notifyError
 	} else {
 		s.Log().WithField("backup", b.Identifier()).Info("notified panel of successful backup state")
 	}

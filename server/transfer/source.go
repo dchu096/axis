@@ -20,8 +20,10 @@ func (t *Transfer) PushArchiveToTarget(url, token string) ([]byte, error) {
 	ctx, cancel := context.WithCancel(t.ctx)
 	defer cancel()
 
+	t.Method = "archive"
 	t.SendMessage("Preparing to stream server data to destination...")
 	t.SetStatus(StatusProcessing)
+	t.ReportProgress(PanelPreparing, "preparing archive stream", 0, 0)
 
 	a, err := t.Archive()
 	if err != nil {
@@ -30,8 +32,9 @@ func (t *Transfer) PushArchiveToTarget(url, token string) ([]byte, error) {
 	}
 
 	t.SendMessage("Streaming archive to destination...")
+	t.ReportProgress(PanelCopying, "streaming archive to destination", 0, a.Progress().Total())
 
-	// Send the upload progress to the websocket every 5 seconds.
+	// Send the upload progress to the websocket every 5 seconds and panel every ~20s.
 	ctx2, cancel2 := context.WithCancel(ctx)
 	defer cancel2()
 	go func(ctx context.Context, p *progress.Progress, tc *time.Ticker) {
@@ -46,6 +49,11 @@ func (t *Transfer) PushArchiveToTarget(url, token string) ([]byte, error) {
 			}
 		}
 	}(ctx2, a.Progress(), time.NewTicker(5*time.Second))
+
+	stopHB := t.StartCopyHeartbeat(20*time.Second, "archive upload in progress", func() (uint64, uint64) {
+		return a.Progress().Written(), a.Progress().Total()
+	})
+	defer stopHB()
 
 	// Create a new request using the pipe as the body.
 	body, writer := io.Pipe()
@@ -77,7 +85,7 @@ func (t *Transfer) PushArchiveToTarget(url, token string) ([]byte, error) {
 		h := sha256.New()
 		tee := io.TeeReader(src, h)
 
-		dest, err := mp.CreateFormFile("archive", "archive.tar.gz")
+		dest, err := mp.CreateFormFile("archive", "archive.tar.zst")
 		if err != nil {
 			errChan <- errors.New("failed to create form file")
 			return
@@ -118,6 +126,7 @@ func (t *Transfer) PushArchiveToTarget(url, token string) ([]byte, error) {
 
 		cancel2()
 		t.SendMessage("Finished streaming archive to destination.")
+		t.ReportProgress(PanelVerifying, "archive streamed; waiting for destination", a.Progress().Written(), a.Progress().Total())
 
 		if err := mp.Close(); err != nil {
 			t.Log().WithError(err).Error("error while closing multipart writer")
@@ -125,7 +134,7 @@ func (t *Transfer) PushArchiveToTarget(url, token string) ([]byte, error) {
 		t.Log().Debug("closed multipart writer")
 	}()
 
-	t.Log().Debug("sending archive to destination")
+	t.Log().WithField("transfer_method", "archive").Debug("sending archive to destination")
 	client := http.Client{Timeout: 0}
 	res, err := client.Do(req)
 	if err != nil {

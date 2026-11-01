@@ -31,6 +31,13 @@ func (s *Server) SyncWithEnvironment() {
 		Labels:      cfg.Labels,
 	})
 
+	// Config sync resets the burst bucket to full; re-apply ceiling unless drained
+	// state was preserved across SetSettings for an in-flight clamp.
+	if s.cpuBurst != nil {
+		s.cpuBurst.Reset()
+		s.cpuBurst.ApplyQuota(s.Environment, s.Environment.Config().Limits())
+	}
+
 	// For Docker specific environments we also want to update the configured image
 	// and stop configuration.
 	if e, ok := s.Environment.(*docker.Environment); ok {

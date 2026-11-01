@@ -17,6 +17,10 @@ type Stats struct {
 	// does not take into account any limits on the server process itself.
 	CpuAbsolute float64 `json:"cpu_absolute"`
 
+	// Percent of burst credit remaining (0–100). Omitted when burst is disabled
+	// so older Axis builds / non-burst servers let Atlas estimate locally.
+	CpuBurstRemaining *float64 `json:"cpu_burst_remaining,omitempty"`
+
 	// Current network transmit in & out for a container.
 	Network NetworkStats `json:"network"`
 

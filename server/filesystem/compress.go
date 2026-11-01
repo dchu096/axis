@@ -28,12 +28,12 @@ import (
 //
 // All paths are relative to the dir that is passed in as the first argument,
 // and the compressed file will be placed at that location named
-// `archive-{date}.tar.gz`.
+// `archive-{date}.tar.zst`.
 func (fs *Filesystem) CompressFiles(dir string, paths []string) (ufs.FileInfo, error) {
 	a := &Archive{Filesystem: fs, BaseDirectory: dir, Files: paths}
 	d := path.Join(
 		dir,
-		fmt.Sprintf("archive-%s.tar.gz", strings.ReplaceAll(time.Now().Format(time.RFC3339), ":", "")),
+		fmt.Sprintf("archive-%s.tar.zst", strings.ReplaceAll(time.Now().Format(time.RFC3339), ":", "")),
 	)
 	f, err := fs.unixFS.OpenFile(d, ufs.O_WRONLY|ufs.O_CREATE, 0o644)
 	if err != nil {
@@ -174,9 +174,11 @@ func (fs *Filesystem) DecompressFile(ctx context.Context, dir string, file strin
 	})
 }
 
-// ExtractStreamUnsafe .
+// ExtractStreamUnsafe extracts a streamed server archive (transfers).
+// New archives are always .tar.zst; the neutral ".tar" hint lets Identify
+// sniff magic so legacy .tar.gz streams from older nodes still restore.
 func (fs *Filesystem) ExtractStreamUnsafe(ctx context.Context, dir string, r io.Reader) error {
-	format, input, err := archives.Identify(ctx, "archive.tar.gz", r)
+	format, input, err := archives.Identify(ctx, "archive.tar", r)
 	if err != nil {
 		if errors.Is(err, archives.NoMatch) {
 			return newFilesystemError(ErrCodeUnknownArchive, err)

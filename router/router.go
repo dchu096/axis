@@ -13,13 +13,13 @@ import (
 
 // Configure configures the routing infrastructure for this daemon instance.
 func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
+	StartChunkCleaner(m)
 	gin.SetMode("release")
 
 	router := gin.New()
 	router.Use(gin.Recovery())
 	if err := router.SetTrustedProxies(config.Get().Api.TrustedProxies); err != nil {
 		panic(errors.WithStack(err))
-		return nil
 	}
 	router.Use(middleware.AttachRequestID(), middleware.CaptureErrors(), middleware.SetAccessControlHeaders())
 	router.Use(middleware.AttachServerManager(m), middleware.AttachApiClient(client))
@@ -54,6 +54,10 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 	// This request does not need the AuthorizationMiddleware as the panel should never call it
 	// and requests are authenticated through a JWT the panel issues to the other daemon.
 	router.POST("/api/transfers", postTransfers)
+	router.POST("/api/transfers/tus", postTusTransferCreate)
+	router.HEAD("/api/transfers/tus/:id", headTusTransfer)
+	router.PATCH("/api/transfers/tus/:id", patchTusTransfer)
+	router.DELETE("/api/transfers/tus/:id", deleteTusTransfer)
 
 	// All the routes beyond this mount will use an authorization middleware
 	// and will not be accessible without the correct Authorization header provided.
@@ -80,6 +84,8 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 		server.POST("/reinstall", postServerReinstall)
 		server.POST("/sync", postServerSync)
 		server.POST("/ws/deny", postServerDenyWSTokens)
+		server.POST("/proxy/create", postServerProxyCreate)
+		server.POST("/proxy/delete", postServerProxyDelete)
 
 		server.GET("/version", getInstalledVersion)
 
@@ -102,6 +108,7 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 		{
 			files.GET("/contents", getServerFileContents)
 			files.GET("/list-directory", getServerListDirectory)
+			files.GET("/disk-usage", getServerDiskUsage)
 			files.PUT("/rename", putServerRenameFiles)
 			files.POST("/search", postServerSearchFiles)
 			files.POST("/copy", postServerCopyFile)
@@ -111,6 +118,7 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 			files.POST("/compress", postServerCompressFiles)
 			files.POST("/decompress", postServerDecompressFiles)
 			files.POST("/chmod", postServerChmodFile)
+			files.POST("/merge-chunks", postServerMergeChunks)
 
 			files.GET("/pull", middleware.RemoteDownloadEnabled(), getServerPullingFiles)
 			files.POST("/pull", middleware.RemoteDownloadEnabled(), postServerPullRemoteFile)
@@ -122,6 +130,17 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 			backup.POST("", postServerBackup)
 			backup.POST("/:backup/restore", postServerRestoreBackup)
 			backup.DELETE("/:backup", deleteServerBackup)
+		}
+
+		shadowGroup := server.Group("/shadow")
+		{
+			shadowGroup.POST("/preflight", postServerShadowPreflight)
+			shadowGroup.POST("", postServerShadow)
+			shadowGroup.GET("", getServerShadow)
+			shadowGroup.POST("/cancel", postServerShadowCancel)
+			shadowGroup.DELETE("", deleteServerShadow)
+			shadowGroup.GET("/list-directory", getServerShadowListDirectory)
+			shadowGroup.POST("/promote", postServerShadowPromote)
 		}
 	}
 

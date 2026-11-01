@@ -20,7 +20,7 @@ import (
 )
 
 func postServerSearchFiles(c *gin.Context) {
-	s := ExtractServer(c)
+	s := middleware.ExtractServer(c)
 
 	var data struct {
 		RootPath       string `json:"root"`

@@ -10,12 +10,12 @@ Drop Axis onto a node the same way you would Wings. Atlas speaks the same node A
 
 | Area | What you get |
 | --- | --- |
-| **API** | Power, console, files, backups, transfers, installs |
+| **API** | Power, console, files, backups, transfers (TUS + archive fallback), installs |
+| **Analytics** | `GET .../files/disk-usage` TreeSize tree for Atlas Analytics |
+| **Backups** | Local or S3/R2 **multipart `.tar.zst`** archives |
 | **SFTP** | Built-in SFTP with the same credentials users see in Atlas |
 | **DevTools** | Per-server sidecar for `git` / `curl` / file work — not a jailbreak shell on the game container |
 | **Compatibility** | Wings-compatible config path and node protocol |
-
-DevTools contract (`devtools.v1`): [`docs/devtools-sidecar.md`](docs/devtools-sidecar.md)
 
 ---
 
@@ -64,6 +64,16 @@ system:
     ports: [40000, 40001, 40002]
 ```
 
+Backup compression (multipart S3 + local). Always **zstd** (`.tar.zst`).
+Legacy `.tar.gz` restores still work. Remove any `format:` / `compression_level:`
+lines from node `config.yml` — they are ignored.
+
+```yaml
+system:
+  backups:
+    zstd_level: 3
+```
+
 ### DevTools image
 
 ```bash
@@ -96,7 +106,6 @@ After upgrading from an older Wings/Axis build that may have leaked a daemon tok
 
 ## Documentation
 
-- [DevTools sidecar contract](docs/devtools-sidecar.md)
 - [Wings install guide](https://pterodactyl.io/wings/1.0/installing.html) (ops baseline)
 - [Changelog](CHANGELOG.md)
 

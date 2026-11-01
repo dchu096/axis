@@ -1,9 +1,7 @@
 package server
 
 import (
-	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mitchellh/colorstring"
@@ -37,31 +35,27 @@ func (rp *ReplacementProcessor) Process(data string) string {
 	return data
 }
 
-// appName is a local cache variable to avoid having to make expensive copies of
-// the configuration every time we need to send output along to the websocket for
-// a server.
-var appName string
-var appNameSync sync.Once
-
-// Only change settings on the right-hand side. The left-hand side is the original message. The right-hand side is the new message.
+// Left side is the message the daemon publishes. Right side is what the console shows.
 var settings = map[string]string{
-	"Checking server disk space usage, this could take a few seconds...": "Checking server disk space usage, this could take a few seconds...",
-	"Updating process configuration files...": "Updating process configuration files...",
-	"Ensuring file permissions are set correctly, this could take a few seconds...": "Ensuring file permissions are set correctly, this could take a few seconds...",
-	"Pulling Docker container image, this could take a few minutes to complete...": "Pulling Docker container image, this could take a few minutes to complete...",
-	"Finished pulling Docker container image": "Finished pulling the Docker container image",
-	"Server crash was detected but an error occurred while handling it.": "Server crash was detected but an error occurred while handling it.",
+	"Checking server disk space usage, this could take a few seconds...":                  "Checking disk space. This can take a few seconds...",
+	"Updating process configuration files...":                                             "Updating server configuration...",
+	"Ensuring file permissions are set correctly, this could take a few seconds...":       "Setting file permissions. This can take a few seconds...",
+	"Pulling Docker container image, this could take a few minutes to complete...":        "Pulling the server image. This can take a few minutes...",
+	"Finished pulling Docker container image":                                             "Server image is ready.",
+	"Server crash was detected but an error occurred while handling it.":                  "The server crashed, and Axis could not restart it.",
+	"Server is outputting console data too quickly -- throttling...":                      "Console output is too fast. Slowing it down...",
+	"Server is exceeding the assigned disk space limit, stopping process now.":            "Disk limit reached. Stopping the server.",
+	"Aborting automatic restart, crash detection is disabled for this instance.":          "Crash recovery is off. Axis will not restart this server.",
+	"---------- Detected server process in a crashed state! ----------":                   "The server process crashed.",
+	"Aborting automatic restart, last crash occurred less than ":                          "Holding restart. Last crash was less than ",
 }
-var Daemon = "[MilesGPT]" // Change the Daemon text.
-var Colouring = "[light_magenta][bold]" //only change this if you know what you are doing
+
+// daemonPrefix is the console label for daemon-originated lines.
+const daemonPrefix = "[light_blue]axis:[default] "
 
 // PublishConsoleOutputFromDaemon sends output to the server console formatted
-// to appear correctly as being sent from Wings.
+// to appear correctly as being sent from Axis.
 func (s *Server) PublishConsoleOutputFromDaemon(data string) {
-	appNameSync.Do(func() {
-		appName = config.Get().AppName
-	})
-
 	// Create the message processors
 	processors := []MessageProcessor{
 		NewReplacementProcessor(settings),
@@ -71,8 +65,7 @@ func (s *Server) PublishConsoleOutputFromDaemon(data string) {
 	for _, processor := range processors {
 		data = processor.Process(data)
 	}
-	// Combine the components in the desired order
-	formattedData := fmt.Sprintf("%s%s:%s %s", Colouring, Daemon, "[default]", data)
+	formattedData := daemonPrefix + data
 
 	// Publish the formatted data to the server console
 	s.Events().Publish(

@@ -110,12 +110,28 @@ func (c *client) SetArchiveStatus(ctx context.Context, uuid string, successful b
 	return nil
 }
 
-func (c *client) SetTransferStatus(ctx context.Context, uuid string, successful bool) error {
+// SetTransferStatusMessage notifies the panel of terminal transfer success/failure.
+// On failure, a non-empty message is sent as JSON {"message":"..."} so Atlas Manage can show it.
+func (c *client) SetTransferStatusMessage(ctx context.Context, uuid string, successful bool, message string) error {
 	state := "failure"
+	var body any
 	if successful {
 		state = "success"
+	} else if message != "" {
+		body = d{"message": message, "error": message}
 	}
-	resp, err := c.Post(ctx, fmt.Sprintf("/servers/%s/transfer/%s", uuid, state), nil)
+	resp, err := c.Post(ctx, fmt.Sprintf("/servers/%s/transfer/%s", uuid, state), body)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+// SetTransferProgress reports mid-flight transfer stage/heartbeat data to the panel.
+// Failures here must not abort the transfer — the panel stuck sweeper is the safety net.
+func (c *client) SetTransferProgress(ctx context.Context, uuid string, data TransferProgressRequest) error {
+	resp, err := c.Post(ctx, fmt.Sprintf("/servers/%s/transfer/progress", uuid), data)
 	if err != nil {
 		return err
 	}
@@ -173,6 +189,17 @@ func (c *client) SetBackupStatus(ctx context.Context, backup string, data Backup
 // activated again.
 func (c *client) SendRestorationStatus(ctx context.Context, backup string, successful bool) error {
 	resp, err := c.Post(ctx, fmt.Sprintf("/backups/%s/restore", backup), d{"successful": successful})
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+// SetShadowStatus notifies the Panel of shadow materialization progress,
+// readiness, or failure for a given shadow UUID.
+func (c *client) SetShadowStatus(ctx context.Context, shadowUUID string, data ShadowStatusRequest) error {
+	resp, err := c.Post(ctx, fmt.Sprintf("/shadows/%s", shadowUUID), data)
 	if err != nil {
 		return err
 	}

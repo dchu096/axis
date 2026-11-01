@@ -63,7 +63,7 @@ var versionCommand = &cobra.Command{
 	Use:   "version",
 	Short: "Prints the current executable version and exits.",
 	Run: func(cmd *cobra.Command, _ []string) {
-		fmt.Printf("wings v%s\nCopyright © 2018 - %d Dane Everitt & Contributors\n", system.Version, time.Now().Year())
+		fmt.Printf("axis %s\nCopyright © 2018 - %d Dane Everitt & Contributors\n", system.Version, time.Now().Year())
 	},
 }
 
@@ -312,6 +312,11 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	// Ensure the backup directory exists.
 	if err := os.MkdirAll(sys.BackupDirectory, 0o755); err != nil {
 		log.WithField("error", err).Error("failed to create backup directory")
+	}
+
+	// Ensure the shadow directory exists.
+	if err := os.MkdirAll(sys.ShadowDirectory, 0o755); err != nil {
+		log.WithField("error", err).Error("failed to create shadow directory")
 	}
 
 	autotls, _ := cmd.Flags().GetBool("auto-tls")

@@ -21,12 +21,6 @@ import (
 	"github.com/0x7d8/wings/server/filesystem"
 )
 
-var format = archives.CompressedArchive{
-	Compression: archives.Gz{},
-	Archival:    archives.Tar{},
-	Extraction:  archives.Tar{},
-}
-
 type AdapterType string
 
 const (
@@ -83,6 +77,10 @@ type Backup struct {
 	client     remote.Client
 	adapter    AdapterType
 	logContext map[string]interface{}
+
+	// foundPath is set when locating an existing archive that may use a
+	// different extension than the currently configured format.
+	foundPath string
 }
 
 func (b *Backup) SetClient(c remote.Client) {
@@ -110,13 +108,41 @@ func (b *Backup) validateIdentifier() error {
 	return nil
 }
 
-// Path returns the path for this specific backup.
+// ArchiveExtension is the on-disk / upload extension for newly created backups.
+func ArchiveExtension() string {
+	return ".tar.zst"
+}
+
+// ArchiveContentType is the Content-Type used when uploading backup parts to S3/R2.
+func ArchiveContentType() string {
+	return "application/zstd"
+}
+
+// Path returns the path for this specific backup (.tar.zst), or a previously
+// located on-disk path when set (may be a legacy .tar.gz).
 func (b *Backup) Path() string {
+	if b.foundPath != "" {
+		return b.foundPath
+	}
 	identifier, err := b.normalizedIdentifier()
 	if err != nil {
 		identifier = path.Base(b.Identifier())
 	}
-	return path.Join(config.Get().System.BackupDirectory, identifier+".tar.gz")
+	return path.Join(config.Get().System.BackupDirectory, identifier+ArchiveExtension())
+}
+
+// candidatePaths returns on-disk paths to check when locating an existing backup
+// (.tar.zst first, then legacy .tar.gz).
+func (b *Backup) candidatePaths() []string {
+	identifier, err := b.normalizedIdentifier()
+	if err != nil {
+		identifier = path.Base(b.Identifier())
+	}
+	dir := config.Get().System.BackupDirectory
+	return []string{
+		path.Join(dir, identifier+".tar.zst"),
+		path.Join(dir, identifier+".tar.gz"),
+	}
 }
 
 // Size returns the size of the generated backup.
@@ -195,6 +221,27 @@ func (b *Backup) log() *log.Entry {
 		l = l.WithField(k, v)
 	}
 	return l
+}
+
+// extractArchive restores files from a gzip or zstd compressed tar stream,
+// detecting the codec from magic bytes.
+func extractArchive(ctx context.Context, r io.Reader, callback RestoreCallback) error {
+	format, input, err := archives.Identify(ctx, "backup.tar", r)
+	if err != nil {
+		return errors.Wrap(err, "backup: identify archive format")
+	}
+	extractor, ok := format.(archives.Extractor)
+	if !ok {
+		return errors.New("backup: identified format is not an archive extractor")
+	}
+	return extractor.Extract(ctx, input, func(ctx context.Context, f archives.FileInfo) error {
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		return callback(f.NameInArchive, f.FileInfo, rc)
+	})
 }
 
 type ArchiveDetails struct {

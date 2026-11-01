@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"emperror.dev/errors"
-	"github.com/apex/log"
-	"github.com/gabriel-vasile/mimetype"
 	ignore "github.com/sabhiram/go-gitignore"
 
 	"github.com/0x7d8/wings/config"
@@ -71,7 +69,9 @@ func (fs *Filesystem) ReadDirStat(path string) ([]ufs.FileInfo, error) {
 	})
 }
 
-// File returns a reader for a file instance as well as the stat information.
+// File returns a reader for a file instance as well as the stat information
+// (including content-sniffed MIME type). Prefer OpenFile for internal binary
+// IO where the MIME type is unused.
 func (fs *Filesystem) File(p string) (ufs.File, Stat, error) {
 	f, err := fs.unixFS.Open(p)
 	if err != nil {
@@ -81,6 +81,21 @@ func (fs *Filesystem) File(p string) (ufs.File, Stat, error) {
 	if err != nil {
 		_ = f.Close()
 		return nil, Stat{}, err
+	}
+	return f, st, nil
+}
+
+// OpenFile opens a file without MIME content sniffing. Use this for streaming
+// and merge paths that only need a reader and size.
+func (fs *Filesystem) OpenFile(p string) (ufs.File, ufs.FileInfo, error) {
+	f, err := fs.unixFS.Open(p)
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
 	}
 	return f, st, nil
 }
@@ -434,51 +449,36 @@ func (fs *Filesystem) Delete(p string) error {
 //}
 
 // ListDirectory lists the contents of a given directory and returns stat
-// information about each file and folder within it.
+// information about each file and folder within it. MIME types are derived
+// from file extensions only — contents are not opened or sniffed.
 func (fs *Filesystem) ListDirectory(p string) ([]Stat, error) {
-	// Read entries from the path on the filesystem, using the mapped reader, so
-	// we can map the DirEntry slice into a Stat slice with mimetype information.
 	out, err := ufs.ReadDirMap(fs.unixFS.UnixFS, p, func(e ufs.DirEntry) (Stat, error) {
 		info, err := e.Info()
 		if err != nil {
 			return Stat{}, err
 		}
 
-		var d string
+		mt := "application/octet-stream"
 		if e.Type().IsDir() {
-			d = "inode/directory"
-		} else {
-			d = "application/octet-stream"
-		}
-		var m *mimetype.MIME
-		if e.Type().IsRegular() {
-			// TODO: I should probably find a better way to do this.
-			eO := e.(interface {
-				Open() (ufs.File, error)
-			})
-			f, err := eO.Open()
-			if err != nil {
-				return Stat{}, err
-			}
-			m, err = mimetype.DetectReader(f)
-			if err != nil {
-				log.Error(err.Error())
-			}
-			_ = f.Close()
+			mt = "inode/directory"
+		} else if e.Type().IsRegular() {
+			mt = MimeByName(e.Name())
 		}
 
-		st := Stat{FileInfo: info, Mimetype: d}
-		if m != nil {
-			st.Mimetype = m.String()
-		}
-		return st, nil
+		return Stat{FileInfo: info, Mimetype: mt}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Sort entries alphabetically.
+	// Directories first, then alphabetical within each group.
 	slices.SortStableFunc(out, func(a, b Stat) int {
+		if a.IsDir() != b.IsDir() {
+			if a.IsDir() {
+				return -1
+			}
+			return 1
+		}
 		switch {
 		case a.Name() == b.Name():
 			return 0
@@ -486,18 +486,6 @@ func (fs *Filesystem) ListDirectory(p string) ([]Stat, error) {
 			return 1
 		default:
 			return -1
-		}
-	})
-
-	// Sort folders before other file types.
-	slices.SortStableFunc(out, func(a, b Stat) int {
-		switch {
-		case a.IsDir() && b.IsDir():
-			return 0
-		case a.IsDir():
-			return -1
-		default:
-			return 1
 		}
 	})
 

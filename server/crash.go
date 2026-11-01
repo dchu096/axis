@@ -71,7 +71,11 @@ func (s *Server) handleServerCrash() error {
 
 	s.PublishConsoleOutputFromDaemon("---------- Detected server process in a crashed state! ----------")
 	s.PublishConsoleOutputFromDaemon(fmt.Sprintf("Exit code: %d", exitCode))
-	s.PublishConsoleOutputFromDaemon(fmt.Sprintf("Out of memory: %t", oomKilled))
+	if oomKilled {
+		s.PublishConsoleOutputFromDaemon("The process ran out of memory.")
+	} else {
+		s.PublishConsoleOutputFromDaemon("The process did not run out of memory.")
+	}
 
 	c := s.crasher.LastCrashTime()
 	timeout := config.Get().System.CrashDetection.Timeout
