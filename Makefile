@@ -2,7 +2,6 @@ GIT_HEAD = $(shell git rev-parse HEAD | head -c8)
 
 build:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -gcflags "all=-trimpath=$(pwd)" -o build/axis_linux_amd64 -v axis.go
-	GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -gcflags "all=-trimpath=$(pwd)" -o build/axis_linux_arm64 -v axis.go
 
 debug:
 	go build -ldflags="-X github.com/0x7d8/wings/system.Version=$(GIT_HEAD)" -o axis

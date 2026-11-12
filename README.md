@@ -36,7 +36,6 @@ Axis is a fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings), ori
 ```bash
 make build
 # → build/axis_linux_amd64
-# → build/axis_linux_arm64
 ```
 
 Or:
