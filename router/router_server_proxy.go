@@ -39,7 +39,7 @@ type LetsEncryptUser struct {
 func (u *LetsEncryptUser) GetEmail() string {
 	return u.Email
 }
-func (u LetsEncryptUser) GetRegistration() *registration.Resource {
+func (u *LetsEncryptUser) GetRegistration() *registration.Resource {
 	return u.Registration
 }
 func (u *LetsEncryptUser) GetPrivateKey() crypto.PrivateKey {

@@ -42,17 +42,6 @@ func (c *cpuBurstController) Reset() {
 	c.lastUpdate = time.Time{}
 }
 
-// Remaining returns the current credit percent, or nil when burst is disabled.
-func (c *cpuBurstController) Remaining(enabled bool) *float64 {
-	if !enabled {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v := math.Round(c.credit*10) / 10
-	return &v
-}
-
 // ApplyQuota writes the current clamp into the environment Limits so the next
 // InSituUpdate / Create uses the correct Docker CPUQuota.
 func (c *cpuBurstController) ApplyQuota(env environment.ProcessEnvironment, limits environment.Limits) {
@@ -70,8 +59,8 @@ func (c *cpuBurstController) ApplyQuota(env environment.ProcessEnvironment, limi
 	env.Config().SetAppliedCpuQuota(quota)
 }
 
-// Sample updates the token bucket from a resource poll reading and may clamp
-// Docker CPUQuota when credit crosses empty or recovers past hysteresis.
+// SampleCpuBurst updates the token bucket from a resource poll reading and may
+// clamp Docker CPUQuota when credit crosses empty or recovers past hysteresis.
 func (s *Server) SampleCpuBurst(cpuAbsolute float64) {
 	if s.cpuBurst == nil || s.Environment == nil {
 		return
@@ -113,8 +102,6 @@ func (s *Server) SampleCpuBurst(cpuAbsolute float64) {
 		c.credit = 0
 		wantBaseline = true
 	} else if c.atBaseline && c.credit >= cpuBurstHysteresis {
-		wantBaseline = false
-	} else if !c.atBaseline && c.credit > 0 {
 		wantBaseline = false
 	}
 

@@ -90,9 +90,7 @@ func getServerListDirectory(c *gin.Context) {
 	if stats, err := s.Filesystem().ListDirectory(dir); err != nil {
 		// If the error is that the folder does not exist return a 404 error.
 		if errors.Is(err, os.ErrNotExist) {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-				"error": "The requested directory was not found on the server.",
-			})
+			abortDirectoryNotFound(c)
 			return
 		}
 
@@ -106,6 +104,12 @@ func getServerListDirectory(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, filtered)
 	}
+}
+
+func abortDirectoryNotFound(c *gin.Context) {
+	c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+		"error": "The requested directory was not found on the server.",
+	})
 }
 
 // getServerDiskUsage returns a TreeSize-style recursive size tree for a server
@@ -123,9 +127,7 @@ func getServerDiskUsage(c *gin.Context) {
 	tree, err := s.Filesystem().DiskUsageTree(directory, depth)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-				"error": "The requested directory was not found on the server.",
-			})
+			abortDirectoryNotFound(c)
 			return
 		}
 		if errors.Is(err, filesystem.ErrNotDirectory) {
@@ -642,7 +644,6 @@ func postServerUploadFiles(c *gin.Context) {
 
 	maxFileSize := config.Get().Api.UploadLimit
 	maxFileSizeBytes := maxFileSize * 1024 * 1024
-	var totalSize int64
 	for _, header := range headers {
 		if header.Size > maxFileSizeBytes {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
@@ -650,7 +651,6 @@ func postServerUploadFiles(c *gin.Context) {
 			})
 			return
 		}
-		totalSize += header.Size
 	}
 
 	for _, header := range headers {

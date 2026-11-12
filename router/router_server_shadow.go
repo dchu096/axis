@@ -186,18 +186,14 @@ func getServerShadowListDirectory(c *gin.Context) {
 	s := middleware.ExtractServer(c)
 	mgr := s.Shadow()
 	if mgr == nil {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-			"error": "The requested directory was not found on the server.",
-		})
+		abortDirectoryNotFound(c)
 		return
 	}
 	dir := c.Query("directory")
 	stats, err := mgr.ListDirectory(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-				"error": "The requested directory was not found on the server.",
-			})
+			abortDirectoryNotFound(c)
 			return
 		}
 		middleware.CaptureAndAbort(c, err)

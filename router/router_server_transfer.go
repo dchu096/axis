@@ -143,7 +143,7 @@ func postServerTransfer(c *gin.Context) {
 				trnsfr.Log().WithField("transfer_method", "tus").Debug("transfer complete")
 				return
 			}
-			if err == context.Canceled || errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) {
 				notifyPanelOfFailure(trnsfr, true, "transfer cancelled")
 				failedNotified = true
 				trnsfr.Log().Debug("canceled")
@@ -170,7 +170,7 @@ func postServerTransfer(c *gin.Context) {
 		}
 
 		if _, err := trnsfr.PushArchiveToTarget(archiveURL, data.Token); err != nil {
-			cancelled := err == context.Canceled || errors.Is(err, context.Canceled)
+			cancelled := errors.Is(err, context.Canceled)
 			msg := err.Error()
 			if cancelled {
 				msg = "transfer cancelled"
@@ -204,15 +204,8 @@ func postServerTransfer(c *gin.Context) {
 func deleteServerTransfer(c *gin.Context) {
 	s := middleware.ExtractServer(c)
 
-	if !s.IsTransferring() {
-		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
-			"error": "Server is not currently being transferred.",
-		})
-		return
-	}
-
 	trnsfr := transfer.Outgoing().Get(s.ID())
-	if trnsfr == nil {
+	if !s.IsTransferring() || trnsfr == nil {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"error": "Server is not currently being transferred.",
 		})

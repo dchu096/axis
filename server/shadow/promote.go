@@ -73,7 +73,7 @@ func promoteDirectory(srcRoot, relRoot string, live *filesystem.Filesystem) erro
 			if parent == "." {
 				parent = "/"
 			}
-			if err := live.CreateDirectory(name, parent); err != nil && !errors.Is(err, os.ErrExist) && !os.IsExist(err) {
+			if err := live.CreateDirectory(name, parent); err != nil && !errors.Is(err, os.ErrExist) {
 				return errors.Wrapf(err, "shadow: failed to create directory %q on live", targetRel)
 			}
 			return nil
@@ -96,8 +96,8 @@ func promoteFile(src, rel string, info os.FileInfo, live *filesystem.Filesystem)
 	if err := live.Write(rel, f, info.Size(), ufs.FileMode(info.Mode().Perm())); err != nil {
 		return errors.Wrapf(err, "shadow: failed to write %q to live filesystem", rel)
 	}
-	atime := info.ModTime()
-	if err := live.Chtimes(rel, atime, atime); err != nil {
+	mtime := info.ModTime()
+	if err := live.Chtimes(rel, mtime, mtime); err != nil {
 		return errors.Wrapf(err, "shadow: failed to set times on %q", rel)
 	}
 	return nil

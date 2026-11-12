@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"cmp"
 	"path"
 	"slices"
 	"strings"
@@ -60,11 +61,7 @@ func normalizeDiskUsagePath(directory string) string {
 	if directory == "" || directory == "." {
 		return "/"
 	}
-	cleaned := path.Clean("/" + strings.TrimLeft(directory, "/"))
-	if cleaned == "." || cleaned == "" {
-		return "/"
-	}
-	return cleaned
+	return path.Clean("/" + strings.TrimLeft(directory, "/"))
 }
 
 func clampDiskUsageDepth(depth int) int {
@@ -111,9 +108,6 @@ func (fs *Filesystem) buildDiskUsageTree(fsPath, displayPath string, depth int, 
 		}
 		childFs := path.Join(fsPath, name)
 		childDisplay := path.Join(displayPath, name)
-		if displayPath == "/" {
-			childDisplay = "/" + name
-		}
 
 		// Don't follow symlinks (avoids loops / double-counting). Match
 		// DirectorySize and omit them from the tree entirely.
@@ -154,18 +148,7 @@ func (fs *Filesystem) buildDiskUsageTree(fsPath, displayPath string, depth int, 
 	}
 
 	slices.SortStableFunc(node.Children, func(a, b *DiskUsageNode) int {
-		switch {
-		case a.Size > b.Size:
-			return -1
-		case a.Size < b.Size:
-			return 1
-		case a.Name < b.Name:
-			return -1
-		case a.Name > b.Name:
-			return 1
-		default:
-			return 0
-		}
+		return cmp.Or(cmp.Compare(b.Size, a.Size), strings.Compare(a.Name, b.Name))
 	})
 
 	node.Size = total

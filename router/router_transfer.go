@@ -52,6 +52,12 @@ func parseTransferToken(c *gin.Context) (*tokens.TransferPayload, error) {
 	return &token, nil
 }
 
+// failIncomingTransfer records err on the transfer and aborts the request with it.
+func failIncomingTransfer(c *gin.Context, trnsfr *transfer.Transfer, err error) {
+	trnsfr.SetFailureMessage(err.Error())
+	middleware.CaptureAndAbort(c, err)
+}
+
 // beginIncomingTransfer creates (or returns) the incoming transfer + server for a JWT subject.
 func beginIncomingTransfer(c *gin.Context, subject string) (*transfer.Transfer, context.Context, context.CancelFunc, error) {
 	manager := middleware.ExtractManager(c)
@@ -123,10 +129,9 @@ func abortIncomingLocal(manager *server.Manager, trnsfr *transfer.Transfer) {
 	}()
 }
 
-func finalizeIncomingTransfer(manager *server.Manager, trnsfr *transfer.Transfer, successful *bool) {
+func finalizeIncomingTransfer(manager *server.Manager, trnsfr *transfer.Transfer, ok bool) {
 	transfer.Incoming().Remove(trnsfr)
 
-	ok := successful != nil && *successful
 	if !ok {
 		msg := trnsfr.FailureMessage()
 		if msg == "" {
@@ -202,21 +207,19 @@ func postTransfers(c *gin.Context) {
 	trnsfr.SetClient(manager.Client())
 
 	successful := false
-	defer finalizeIncomingTransfer(manager, trnsfr, &successful)
+	defer func() { finalizeIncomingTransfer(manager, trnsfr, successful) }()
 
 	mediaType, params, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
 	if err != nil {
-		trnsfr.SetFailureMessage(err.Error())
 		trnsfr.Log().Debug("failed to parse content type header")
-		middleware.CaptureAndAbort(c, err)
+		failIncomingTransfer(c, trnsfr, err)
 		return
 	}
 
 	if !strings.HasPrefix(mediaType, "multipart/") {
 		err := fmt.Errorf("invalid content type \"%s\", expected \"multipart/form-data\"", mediaType)
-		trnsfr.SetFailureMessage(err.Error())
 		trnsfr.Log().Debug("invalid content type")
-		middleware.CaptureAndAbort(c, err)
+		failIncomingTransfer(c, trnsfr, err)
 		return
 	}
 
@@ -247,8 +250,7 @@ out:
 				break out
 			}
 			if err != nil {
-				trnsfr.SetFailureMessage(err.Error())
-				middleware.CaptureAndAbort(c, err)
+				failIncomingTransfer(c, trnsfr, err)
 				return
 			}
 
@@ -259,15 +261,13 @@ out:
 				trnsfr.ReportProgress(transfer.PanelCopying, "extracting archive", 0, 0)
 
 				if err := trnsfr.Server.EnsureDataDirectoryExists(); err != nil {
-					trnsfr.SetFailureMessage(err.Error())
-					middleware.CaptureAndAbort(c, err)
+					failIncomingTransfer(c, trnsfr, err)
 					return
 				}
 
 				tee := io.TeeReader(p, h)
 				if err := trnsfr.Server.Filesystem().ExtractStreamUnsafe(ctx, "/", tee); err != nil {
-					trnsfr.SetFailureMessage(err.Error())
-					middleware.CaptureAndAbort(c, err)
+					failIncomingTransfer(c, trnsfr, err)
 					return
 				}
 
@@ -278,8 +278,7 @@ out:
 
 				if !hasArchive {
 					err := errors.New("archive must be sent before the checksum")
-					trnsfr.SetFailureMessage(err.Error())
-					middleware.CaptureAndAbort(c, err)
+					failIncomingTransfer(c, trnsfr, err)
 					return
 				}
 
@@ -287,16 +286,14 @@ out:
 
 				v, err := io.ReadAll(p)
 				if err != nil {
-					trnsfr.SetFailureMessage(err.Error())
-					middleware.CaptureAndAbort(c, err)
+					failIncomingTransfer(c, trnsfr, err)
 					return
 				}
 
 				expected := make([]byte, hex.DecodedLen(len(v)))
 				n, err := hex.Decode(expected, v)
 				if err != nil {
-					trnsfr.SetFailureMessage(err.Error())
-					middleware.CaptureAndAbort(c, err)
+					failIncomingTransfer(c, trnsfr, err)
 					return
 				}
 				actual := h.Sum(nil)
@@ -308,8 +305,7 @@ out:
 
 				if !bytes.Equal(expected[:n], actual) {
 					err := errors.New("checksums don't match")
-					trnsfr.SetFailureMessage(err.Error())
-					middleware.CaptureAndAbort(c, err)
+					failIncomingTransfer(c, trnsfr, err)
 					return
 				}
 
@@ -323,15 +319,13 @@ out:
 
 	if !hasArchive || !hasChecksum {
 		err := errors.New("missing archive or checksum")
-		trnsfr.SetFailureMessage(err.Error())
-		middleware.CaptureAndAbort(c, err)
+		failIncomingTransfer(c, trnsfr, err)
 		return
 	}
 
 	if !checksumVerified {
 		err := errors.New("checksums don't match")
-		trnsfr.SetFailureMessage(err.Error())
-		middleware.CaptureAndAbort(c, err)
+		failIncomingTransfer(c, trnsfr, err)
 		return
 	}
 
@@ -339,8 +333,7 @@ out:
 
 	// Ensure the server environment gets configured.
 	if err := trnsfr.Server.CreateEnvironment(); err != nil {
-		trnsfr.SetFailureMessage(err.Error())
-		middleware.CaptureAndAbort(c, err)
+		failIncomingTransfer(c, trnsfr, err)
 		return
 	}
 
@@ -353,15 +346,8 @@ out:
 func deleteTransfer(c *gin.Context) {
 	s := middleware.ExtractServer(c)
 
-	if !s.IsTransferring() {
-		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
-			"error": "Server is not currently being transferred.",
-		})
-		return
-	}
-
 	trnsfr := transfer.Incoming().Get(s.ID())
-	if trnsfr == nil {
+	if !s.IsTransferring() || trnsfr == nil {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"error": "Server is not currently being transferred.",
 		})
@@ -379,8 +365,7 @@ func deleteTransfer(c *gin.Context) {
 		if u := transfer.GetTusUploadByServer(s.ID()); u != nil {
 			u.Abort()
 		}
-		successful := false
-		finalizeIncomingTransfer(middleware.ExtractManager(c), trnsfr, &successful)
+		finalizeIncomingTransfer(middleware.ExtractManager(c), trnsfr, false)
 	}
 
 	c.Status(http.StatusAccepted)
@@ -574,7 +559,6 @@ func patchTusTransfer(c *gin.Context) {
 
 	if upload.Offset > upload.Length {
 		err := fmt.Errorf("tus: upload exceeded declared length (%d > %d)", upload.Offset, upload.Length)
-		upload.Transfer.SetFailureMessage(err.Error())
 		failTusUpload(middleware.ExtractManager(c), upload, err)
 		middleware.CaptureAndAbort(c, err)
 		return
@@ -584,7 +568,6 @@ func patchTusTransfer(c *gin.Context) {
 	upload.Finalizing = true
 	manager := middleware.ExtractManager(c)
 	if err := completeTusUpload(c.Request.Context(), manager, upload); err != nil {
-		upload.Transfer.SetFailureMessage(err.Error())
 		failTusUpload(manager, upload, err)
 		middleware.CaptureAndAbort(c, err)
 		return
@@ -653,28 +636,23 @@ func completeTusUpload(ctx context.Context, manager *server.Manager, upload *tra
 		return err
 	}
 
-	successful := true
 	upload.Completed = true
 	upload.CleanupSpool()
 	transfer.RemoveTusUpload(upload.ID)
 	trnsfr.ReportProgress(transfer.PanelCompleted, "TUS transfer complete", uint64(upload.Length), uint64(upload.Length))
 	trnsfr.Log().WithField("transfer_method", "tus").Debug("TUS transfer finalized")
-	finalizeIncomingTransfer(manager, trnsfr, &successful)
+	finalizeIncomingTransfer(manager, trnsfr, true)
 	return nil
 }
 
 func failTusUpload(manager *server.Manager, upload *transfer.TusUpload, err error) {
-	if upload == nil {
-		return
-	}
-	if upload.Transfer != nil && err != nil {
+	if upload.Transfer != nil {
 		upload.Transfer.SetFailureMessage(err.Error())
 	}
 	upload.CleanupSpool()
 	transfer.RemoveTusUpload(upload.ID)
 	if upload.Transfer != nil {
-		successful := false
-		finalizeIncomingTransfer(manager, upload.Transfer, &successful)
+		finalizeIncomingTransfer(manager, upload.Transfer, false)
 	}
 }
 
